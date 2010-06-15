@@ -210,7 +210,10 @@ public class Activator extends Thread implements BundleActivator, TesterConstant
 				String method = fqn.substring(n + 1);
 				fqn = fqn.substring(0, n);
 				Class<?> clazz = loadClass(tfw, fqn);
-				suite.addTest(TestSuite.createTest(clazz, method));
+				if ( clazz != null )
+					suite.addTest(TestSuite.createTest(clazz, method));
+				else
+					throw new IllegalArgumentException("Could not load class: " + fqn);
 			} else {
 				Class<?> clazz = loadClass(tfw, fqn);
 				suite.addTestSuite(clazz);

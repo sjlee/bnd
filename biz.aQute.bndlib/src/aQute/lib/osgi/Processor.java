@@ -17,8 +17,8 @@ public class Processor implements Reporter, Constants, Closeable {
 	public static String	DEFAULT_PLUGINS	= "";								// "aQute.lib.spring.SpringComponent";
 	// TODO make splitter skip eagerly whitespace so trim is not necessary
 	public static String	LIST_SPLITTER	= "\\\\?\\s*,\\s*";
-	private List<String>	errors			= new ArrayList<String>();
-	private List<String>	warnings		= new ArrayList<String>();
+	private List<Message>	errors			= new ArrayList<Message>();
+	private List<Message>	warnings		= new ArrayList<Message>();
 	boolean					pedantic;
 	boolean					trace;
 	boolean					exceptions;
@@ -40,6 +40,45 @@ public class Processor implements Reporter, Constants, Closeable {
 	Collection<String>		filter;
 	HashSet<String>			missingCommand;
 	List<Object>			basicPlugins	= new ArrayList<Object>();
+
+	static public class Message {
+		String		format;
+		Object		args[];
+		Throwable	throwable;
+		String		prefix;
+
+		public Message(String format, Object[] args) {
+			this.format = format;
+			this.args = args;
+		}
+
+		public Where where() {
+			for (Object o : args) {
+				if (o instanceof Where)
+					return (Where) o;
+			}
+			return null;
+		}
+
+		public Throwable getThrowable() {
+			for (Object o : args) {
+				if (o instanceof Throwable)
+					return (Throwable) o;
+			}
+			return null;			
+		}
+		
+		public String toString() {
+			if ( prefix == null )
+				return String.format(format, args);
+			else
+				return String.format(prefix + " : " + format, args);
+		}
+
+		public void setPrefix( String prefix) {
+			this.prefix = prefix;
+		}
+	}
 
 	public Processor() {
 		properties = new Properties();
@@ -71,10 +110,10 @@ public class Processor implements Reporter, Constants, Closeable {
 
 	public void getInfo(Processor processor, String prefix) {
 		if (isFailOk())
-			addAll(warnings, processor.getErrors(), prefix);
+			addAll(warnings, processor.warnings, prefix);
 		else
-			addAll(errors, processor.getErrors(), prefix);
-		addAll(warnings, processor.getWarnings(), prefix);
+			addAll(errors, processor.errors, prefix);
+		addAll(warnings, processor.warnings, prefix);
 
 		processor.errors.clear();
 		processor.warnings.clear();
@@ -84,47 +123,49 @@ public class Processor implements Reporter, Constants, Closeable {
 		getInfo(processor, "");
 	}
 
-	private <T> void addAll(List<String> to, List<? extends T> from, String prefix) {
-		for (T x : from) {
-			to.add(prefix + x);
+	private void addAll(List<Message> to, List<Message> from, String prefix) {
+		for (Message x : from) {
+			x.prefix = prefix;
+			to.add(x);
 		}
 	}
 
 	public void warning(String string, Object... args) {
-		String s = String.format(string, args);
-		if (!warnings.contains(s))
-			warnings.add(s);
+		Message m = new Message(string, args);
+		warnings.add(m);
 	}
 
 	public void error(String string, Object... args) {
 		if (isFailOk())
 			warning(string, args);
 		else {
-			String s = String.format(string, args);
-			if (!errors.contains(s))
-				errors.add(s);
+			errors.add(new Message(string, args));
 		}
 	}
 
-	public void error(String string, Throwable t, Object... args) {
-		if (isFailOk())
-			warning(string + ": " + t, args);
-		else {
-			errors.add("Exception: " + t.getMessage());
-			String s = String.format(string, args);
-			if (!errors.contains(s))
-				errors.add(s);
-		}
-		if (exceptions)
-			t.printStackTrace();
-	}
 
-	public List<String> getWarnings() {
+	public List<Message> getWarningMessages() {
 		return warnings;
 	}
 
-	public List<String> getErrors() {
+	public List<Message> getErrorMessages() {
 		return errors;
+	}
+	
+	public List<String> getWarnings() {
+		return toString(warnings);
+	}
+
+	public List<String> getErrors() {
+		return toString(errors);
+	}
+	
+	private List<String> toString( Collection<?> s ) {
+		List<String> result = new ArrayList<String>();
+		for ( Object o : s ) {
+			result.add( o.toString());
+		}
+		return result;
 	}
 
 	public Map<String, Map<String, String>> parseHeader(String value) {
@@ -486,9 +527,10 @@ public class Processor implements Reporter, Constants, Closeable {
 							if (overwrite) {
 								p.putAll(sub);
 							} else {
-								for ( Map.Entry<?,?>  entry : sub.entrySet()) {
-									if ( !properties.containsKey(entry.getKey()))
-										setProperty((String) entry.getKey(), (String) entry.getValue());
+								for (Map.Entry<?, ?> entry : sub.entrySet()) {
+									if (!properties.containsKey(entry.getKey()))
+										setProperty((String) entry.getKey(), (String) entry
+												.getValue());
 								}
 							}
 						}
@@ -1076,12 +1118,12 @@ public class Processor implements Reporter, Constants, Closeable {
 		return pluginLoader;
 	}
 
-	
 	/*
 	 * Check if this is a valid project.
 	 */
 	public boolean exists() {
-		return base != null && base.isDirectory() && propertiesFile != null && propertiesFile.isFile();
+		return base != null && base.isDirectory() && propertiesFile != null
+				&& propertiesFile.isFile();
 	}
 
 	public boolean isOk() {
@@ -1225,5 +1267,7 @@ public class Processor implements Reporter, Constants, Closeable {
 		target.delete();
 	}
 
-	public boolean isTrace() { return trace; }
+	public boolean isTrace() {
+		return trace;
+	}
 }

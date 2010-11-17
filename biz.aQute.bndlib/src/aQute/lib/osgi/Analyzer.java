@@ -30,6 +30,7 @@ import aQute.bnd.annotation.*;
 import aQute.bnd.service.*;
 import aQute.lib.osgi.Clazz.*;
 import aQute.libg.generics.*;
+import aQute.libg.version.Version;
 
 public class Analyzer extends Processor {
 
@@ -62,6 +63,7 @@ public class Analyzer extends Processor {
 	String									versionPolicyUses;
 	String									versionPolicyImplemented;
 	boolean									diagnostics				= false;
+	SortedSet<Clazz.JAVA>					formats					= new TreeSet<Clazz.JAVA>();
 
 	public Analyzer(Processor parent) {
 		super(parent);
@@ -98,14 +100,13 @@ public class Analyzer extends Processor {
 	}
 
 	/**
-	 * Calcualtes the data structures for generating a manifest.
+	 * Calculates the data structures for generating a manifest.
 	 * 
 	 * @throws IOException
 	 */
 	public void analyze() throws Exception {
 		if (!analyzed) {
 			analyzed = true;
-			classpathExports = newHashMap();
 			activator = getProperty(BUNDLE_ACTIVATOR);
 			bundleClasspath = parseHeader(getProperty(BUNDLE_CLASSPATH));
 
@@ -217,6 +218,10 @@ public class Analyzer extends Processor {
 					imports.put(p, map);
 				}
 			}
+
+			// See what information we can find to augment the
+			// exports. I.e. look on the classpath
+			augmentExports();
 
 			// See what information we can find to augment the
 			// imports. I.e. look on the classpath
@@ -712,7 +717,7 @@ public class Analyzer extends Processor {
 		if (interfaceName.startsWith("java."))
 			return true;
 
-		if (referred != null && !referred.isEmpty()) {
+		if (imports != null && !imports.isEmpty()) {
 			String pack = interfaceName;
 			int n = pack.lastIndexOf('.');
 			if (n > 0)
@@ -720,7 +725,7 @@ public class Analyzer extends Processor {
 			else
 				pack = ".";
 
-			if (referred.containsKey(pack))
+			if (imports.containsKey(pack))
 				return true;
 		}
 		int n = interfaceName.lastIndexOf('.');
@@ -881,8 +886,8 @@ public class Analyzer extends Processor {
 	 * ... The commented out part calculated the groups and then removed the
 	 * imports from there. Now we only remove imports that have internal
 	 * references. Using internal code for an exported package means that a
-	 * bundle cannot import that package from elsewhere because its
-	 * assumptions might be violated if it receives a substitution. //
+	 * bundle cannot import that package from elsewhere because its assumptions
+	 * might be violated if it receives a substitution. //
 	 */
 	Map<String, Map<String, String>> doExportsToImports(Map<String, Map<String, String>> exports) {
 
@@ -906,7 +911,7 @@ public class Analyzer extends Processor {
 
 		// Not necessary to import anything that is already
 		// imported in the Import-Package statement.
-		if ( imports != null )
+		if (imports != null)
 			toBeImported.removeAll(imports.keySet());
 
 		// Remove exported packages that are referring to
@@ -962,15 +967,15 @@ public class Analyzer extends Processor {
 			if (noimport != null && noimport.equalsIgnoreCase("true"))
 				continue;
 
-			String version = parameters.get(VERSION_ATTRIBUTE);
-			// we can't substitute when there is no version
-			if (version == null) {
-				if ( isPedantic())
-					warning(
-						"Cannot automatically import exported package %s because it has no version defined",
-						ep);
-				continue;
-			}
+			// // we can't substitute when there is no version
+			// String version = parameters.get(VERSION_ATTRIBUTE);
+			// if (version == null) {
+			// if (isPedantic())
+			// warning(
+			// "Cannot automatically import exported package %s because it has no version defined",
+			// ep);
+			// continue;
+			// }
 
 			parameters = newMap(parameters);
 			parameters.remove(VERSION_ATTRIBUTE);
@@ -1008,32 +1013,33 @@ public class Analyzer extends Processor {
 	 * @param refs
 	 *            the uses from the group
 	 */
-	private void merge(Set<String> imports, Map<String, Set<String>> groups, String a, String b) {
-		Set<String> as = groups.get(a);
-		Set<String> bs = groups.get(b);
-		if (as == null && bs == null) {
-			Set<String> result = newSet();
-			result.add(a);
-			result.add(b);
-			groups.put(a, result);
-			groups.put(b, result);
-		} else if (as == null) {
-			bs.add(a);
-			if (imports.contains(a))
-				groups.put(a, bs);
-		} else if (bs == null) {
-			as.add(b);
-			if (imports.contains(b))
-				groups.put(b, as);
-		} else if (as == bs) {
-			return;
-		} else {
-			// as!=null bs != null
-			// pick one.
-			as.addAll(bs);
-			groups.put(b, as);
-		}
-	}
+	// private void merge(Set<String> imports, Map<String, Set<String>> groups,
+	// String a, String b) {
+	// Set<String> as = groups.get(a);
+	// Set<String> bs = groups.get(b);
+	// if (as == null && bs == null) {
+	// Set<String> result = newSet();
+	// result.add(a);
+	// result.add(b);
+	// groups.put(a, result);
+	// groups.put(b, result);
+	// } else if (as == null) {
+	// bs.add(a);
+	// if (imports.contains(a))
+	// groups.put(a, bs);
+	// } else if (bs == null) {
+	// as.add(b);
+	// if (imports.contains(b))
+	// groups.put(b, as);
+	// } else if (as == bs) {
+	// return;
+	// } else {
+	// // as!=null bs != null
+	// // pick one.
+	// as.addAll(bs);
+	// groups.put(b, as);
+	// }
+	// }
 
 	public boolean referred(String packageName) {
 		// return true;
@@ -1063,7 +1069,7 @@ public class Analyzer extends Processor {
 					InputStream in = resource.openInputStream();
 					try {
 						String version = parsePackageInfo(in);
-						setPackageInfo(dir, "version", version);
+						setPackageInfo(dir, VERSION_ATTRIBUTE, version);
 					} finally {
 						in.close();
 					}
@@ -1096,6 +1102,7 @@ public class Analyzer extends Processor {
 	 * Find some more information about imports in manifest and other places.
 	 */
 	void augmentImports() {
+
 		for (String packageName : imports.keySet()) {
 			setProperty(CURRENT_PACKAGE, packageName);
 			try {
@@ -1112,39 +1119,87 @@ public class Analyzer extends Processor {
 								.get(IMPORT_DIRECTIVE));
 				}
 
-				// Convert any attribute values that have macros.
-				for (String key : importAttributes.keySet()) {
-					String value = importAttributes.get(key);
-					if (value.indexOf('$') >= 0) {
-						value = getReplacer().process(value);
-						importAttributes.put(key, value);
-					}
-				}
-
-				// You can add a remove-attribute: directive with a regular
-				// expression for attributes that need to be removed. We also
-				// remove all attributes that have a value of !. This allows
-				// you to use macros with ${if} to remove values.
-				String remove = importAttributes.remove(REMOVE_ATTRIBUTE_DIRECTIVE);
-				Instruction removeInstr = null;
-
-				if (remove != null)
-					removeInstr = Instruction.getPattern(remove);
-
-				for (Iterator<Map.Entry<String, String>> i = importAttributes.entrySet().iterator(); i
-						.hasNext();) {
-					Map.Entry<String, String> entry = i.next();
-					if (entry.getValue().equals("!"))
-						i.remove();
-					else if (removeInstr != null && removeInstr.matches((String) entry.getKey()))
-						i.remove();
-					else {
-						// Not removed ...
-					}
-				}
+				fixupAttributes(importAttributes);
+				removeAttributes(importAttributes);
 
 			} finally {
 				unsetProperty(CURRENT_PACKAGE);
+			}
+		}
+	}
+
+	/**
+	 * Provide any macro substitutions and versions for exported packages.
+	 */
+
+	void augmentExports() {
+		for (String packageName : exports.keySet()) {
+			setProperty(CURRENT_PACKAGE, packageName);
+			try {
+				Map<String, String> attributes = exports.get(packageName);
+				Map<String, String> exporterAttributes = classpathExports.get(packageName);
+				if (exporterAttributes == null)
+					continue;
+
+				for (Map.Entry<String, String> entry : exporterAttributes.entrySet()) {
+					String key = entry.getKey();
+					if (key.equalsIgnoreCase(SPECIFICATION_VERSION))
+						key = VERSION_ATTRIBUTE;
+					if (!key.endsWith(":") && !attributes.containsKey(key)) {
+						attributes.put(key, entry.getValue());
+					}
+				}
+
+				fixupAttributes(attributes);
+				removeAttributes(attributes);
+
+			} finally {
+				unsetProperty(CURRENT_PACKAGE);
+			}
+		}
+	}
+
+	/**
+	 * Fixup Attributes
+	 * 
+	 * Execute any macros on an export and
+	 */
+
+	void fixupAttributes(Map<String, String> attributes) {
+		// Convert any attribute values that have macros.
+		for (String key : attributes.keySet()) {
+			String value = attributes.get(key);
+			if (value.indexOf('$') >= 0) {
+				value = getReplacer().process(value);
+				attributes.put(key, value);
+			}
+		}
+
+	}
+
+	/*
+	 * Remove the attributes mentioned in the REMOVE_ATTRIBUTE_DIRECTIVE.
+	 */
+
+	void removeAttributes(Map<String, String> attributes) {
+		// You can add a remove-attribute: directive with a regular
+		// expression for attributes that need to be removed. We also
+		// remove all attributes that have a value of !. This allows
+		// you to use macros with ${if} to remove values.
+		String remove = attributes.remove(REMOVE_ATTRIBUTE_DIRECTIVE);
+		Instruction removeInstr = null;
+
+		if (remove != null)
+			removeInstr = Instruction.getPattern(remove);
+
+		for (Iterator<Map.Entry<String, String>> i = attributes.entrySet().iterator(); i.hasNext();) {
+			Map.Entry<String, String> entry = i.next();
+			if (entry.getValue().equals("!"))
+				i.remove();
+			else if (removeInstr != null && removeInstr.matches((String) entry.getKey()))
+				i.remove();
+			else {
+				// Not removed ...
 			}
 		}
 	}
@@ -1178,15 +1233,13 @@ public class Analyzer extends Processor {
 	 */
 	private void augmentVersion(Map<String, String> currentAttributes, Map<String, String> exporter) {
 
-		String exportVersion = (String) exporter.get("version");
-		if (exportVersion == null)
-			exportVersion = (String) exporter.get("specification-version");
+		String exportVersion = (String) exporter.get(VERSION_ATTRIBUTE);
 		if (exportVersion == null)
 			return;
 
 		exportVersion = cleanupVersion(exportVersion);
-		String importRange = currentAttributes.get("version");
-		boolean impl = isTrue(currentAttributes.get(IMPLEMENTED_DIRECTIVE));
+		String importRange = currentAttributes.get(VERSION_ATTRIBUTE);
+		boolean impl = isTrue(currentAttributes.get(PROVIDE_DIRECTIVE));
 		try {
 			setProperty("@", exportVersion);
 
@@ -1203,7 +1256,7 @@ public class Analyzer extends Processor {
 		// we must replace the ${@} with the version we
 		// found this can be useful if you want a range to start
 		// with the found version.
-		currentAttributes.put("version", importRange);
+		currentAttributes.put(VERSION_ATTRIBUTE, importRange);
 	}
 
 	/**
@@ -1324,7 +1377,8 @@ public class Analyzer extends Processor {
 				map = new HashMap<String, String>();
 				classpathExports.put(pack, map);
 			}
-			map.put(key, value);
+			if (!map.containsKey(VERSION_ATTRIBUTE))
+				map.put(key, value);
 		}
 	}
 
@@ -1469,7 +1523,7 @@ public class Analyzer extends Processor {
 		return dot;
 	}
 
-	Map<String, Clazz> analyzeBundleClasspath(Jar dot,
+	protected Map<String, Clazz> analyzeBundleClasspath(Jar dot,
 			Map<String, Map<String, String>> bundleClasspath,
 			Map<String, Map<String, String>> contained, Map<String, Map<String, String>> referred,
 			Map<String, Set<String>> uses) throws IOException {
@@ -1513,6 +1567,10 @@ public class Analyzer extends Processor {
 					}
 				}
 			}
+
+			for (Clazz c : classSpace.values()) {
+				formats.add(c.getFormat());
+			}
 		}
 		return classSpace;
 	}
@@ -1552,14 +1610,19 @@ public class Analyzer extends Processor {
 
 						Map<String, String> info = newMap();
 						contained.put(pack, info);
+
 						Resource pinfo = jar.getResource(prefix + pack.replace('.', '/')
 								+ "/packageinfo");
 						if (pinfo != null) {
 							InputStream in = pinfo.openInputStream();
-							String version = parsePackageInfo(in);
-							in.close();
+							String version;
+							try {
+								version = parsePackageInfo(in);
+							} finally {
+								in.close();
+							}
 							if (version != null)
-								info.put("version", version);
+								info.put(VERSION_ATTRIBUTE, version);
 						}
 					}
 				}
@@ -1631,19 +1694,33 @@ public class Analyzer extends Processor {
 			throws IOException {
 		clazz.parseClassFileWithCollector(new ClassDataCollector() {
 			@Override public void annotation(Annotation a) {
-				if (a.name.equals(Export.RNAME)) {
+				if (a.name.equals(Clazz.rname(aQute.bnd.annotation.Version.class))) {
 
 					// Check version
+					String version = a.get("value");
 					if (!info.containsKey(Constants.VERSION_ATTRIBUTE)) {
-						String version = a.get(Export.VERSION);
 						if (version != null) {
+							version = getReplacer().process(version);
 							if (Verifier.VERSION.matcher(version).matches())
-								info.put(VERSION_ATTRIBUTE, getReplacer().process(version));
+								info.put(VERSION_ATTRIBUTE, version);
 							else
 								error("Export annotatio in %s has invalid version info: %s", clazz,
 										version);
 						}
+					} else {
+						// Verify this matches with packageinfo
+						String presentVersion = info.get(VERSION_ATTRIBUTE);
+						try {							
+							Version av = new Version(presentVersion);
+							Version bv = new Version(version);
+							if ( !av.equals(bv)) {
+								error("Version from annotation for %s differs with packageinfo or Manifest", Clazz.getPackage(clazz.className));
+							}
+						} catch( Exception e) {
+							// Ignore
+						}
 					}
+				} else if (a.name.equals(Clazz.rname(Export.class))) {
 
 					// Check mandatory attributes
 					Map<String, String> attrs = doAttrbutes((Object[]) a.get(Export.MANDATORY),
@@ -1734,10 +1811,13 @@ public class Analyzer extends Processor {
 	static Pattern	nummeric			= Pattern.compile("\\d*");
 
 	static public String cleanupVersion(String version) {
-		if (Verifier.VERSIONRANGE.matcher(version).matches())
-			return version;
+		Matcher m = Verifier.VERSIONRANGE.matcher(version);
 
-		Matcher m = fuzzyVersionRange.matcher(version);
+		if (m.matches()) {
+			return version;
+		}
+
+		m = fuzzyVersionRange.matcher(version);
 		if (m.matches()) {
 			String prefix = m.group(1);
 			String first = m.group(2);
@@ -1748,9 +1828,9 @@ public class Analyzer extends Processor {
 			m = fuzzyVersion.matcher(version);
 			if (m.matches()) {
 				StringBuffer result = new StringBuffer();
-				String major = m.group(1);
-				String minor = m.group(3);
-				String micro = m.group(5);
+				String major = removeLeadingZeroes(m.group(1));
+				String minor = removeLeadingZeroes(m.group(3));
+				String micro = removeLeadingZeroes(m.group(5));
 				String qualifier = m.group(7);
 
 				if (major != null) {
@@ -1778,6 +1858,16 @@ public class Analyzer extends Processor {
 			}
 		}
 		return version;
+	}
+
+	private static String removeLeadingZeroes(String group) {
+		int n = 0;
+		while (group != null && n < group.length() - 1 && group.charAt(n) == '0')
+			n++;
+		if (n == 0)
+			return group;
+
+		return group.substring(n);
 	}
 
 	static void cleanupModifier(StringBuffer result, String modifier) {
@@ -1832,16 +1922,41 @@ public class Analyzer extends Processor {
 		return null;
 	}
 
-	public String getVersionPolicy(boolean implemented) {
-		String vp = implemented ? getProperty(VERSIONPOLICY_IMPL) : getProperty(VERSIONPOLICY_USES);
+	final static String	DEFAULT_PROVIDER_POLICY	= "${range;[==,=+)}";
+	final static String	DEFAULT_CONSUMER_POLICY	= "${range;[==,+)}";
 
-		if (vp != null)
-			return vp;
+	@SuppressWarnings("deprecation") public String getVersionPolicy(boolean implemented) {
+		if (implemented) {
+			String s = getProperty(PROVIDER_POLICY);
+			if (s != null)
+				return s;
 
-		if (implemented)
-			return getProperty(VERSIONPOLICY_IMPL, "[${version;==;${@}},${version;=+;${@}})");
-		else
-			return getProperty(VERSIONPOLICY, "[${version;==;${@}},${version;+;${@}})");
+			s = getProperty(VERSIONPOLICY_IMPL);
+			if (s != null)
+				return s;
+
+			return getProperty(VERSIONPOLICY, DEFAULT_PROVIDER_POLICY);
+		} else {
+			String s = getProperty(CONSUMER_POLICY);
+			if (s != null)
+				return s;
+
+			s = getProperty(VERSIONPOLICY_USES);
+			if (s != null)
+				return s;
+
+			return getProperty(VERSIONPOLICY, DEFAULT_CONSUMER_POLICY);
+		}
+		// String vp = implemented ? getProperty(VERSIONPOLICY_IMPL) :
+		// getProperty(VERSIONPOLICY_USES);
+		//
+		// if (vp != null)
+		// return vp;
+		//
+		// if (implemented)
+		// return getProperty(VERSIONPOLICY_IMPL, "{$range;[==,=+}");
+		// else
+		// return getProperty(VERSIONPOLICY, "${range;[==,+)}");
 	}
 
 	/**
@@ -2006,6 +2121,12 @@ public class Analyzer extends Processor {
 
 	public boolean isNoBundle() {
 		return isTrue(getProperty(RESOURCEONLY)) || isTrue(getProperty(NOMANIFEST));
+	}
+
+	public void referTo(String impl) {
+		String pack = Clazz.getPackage(impl);
+		if (!referred.containsKey(pack))
+			referred.put(pack, new LinkedHashMap<String, String>());
 	}
 
 }

@@ -7,6 +7,7 @@ import java.text.*;
 import java.util.*;
 import java.util.regex.*;
 
+import aQute.lib.io.*;
 import aQute.libg.sed.*;
 import aQute.libg.version.*;
 
@@ -17,15 +18,28 @@ import aQute.libg.version.*;
  * as functions in the macro processor (without the _). Macros can nest to any
  * depth but may not contain loops.
  * 
+ * Add POSIX macros:
+ * ${#parameter}
+    String length.
+
+${parameter%word}
+    Remove smallest suffix pattern.
+
+${parameter%%word}
+    Remove largest suffix pattern.
+
+${parameter#word}
+    Remove smallest prefix pattern.
+
+${parameter##word}
+    Remove largest prefix pattern. 
  */
 public class Macro implements Replacer {
-	Properties	properties;
 	Processor	domain;
 	Object		targets[];
 	boolean		flattening;
 
-	public Macro(Properties properties, Processor domain, Object... targets) {
-		this.properties = properties;
+	public Macro(Processor domain, Object... targets) {
 		this.domain = domain;
 		this.targets = targets;
 		if (targets != null) {
@@ -35,12 +49,8 @@ public class Macro implements Replacer {
 		}
 	}
 
-	public Macro(Processor processor) {
-		this(new Properties(), processor);
-	}
-
-	public String process(String line) {
-		return process(line, null);
+	public String process(String line, Processor source) {
+		return process(line, new Link(source,null,line));
 	}
 
 	String process(String line, Link link) {
@@ -108,13 +118,22 @@ public class Macro implements Replacer {
 		if (key != null) {
 			key = key.trim();
 			if (key.length() > 0) {
-				String value = (String) properties.getProperty(key);
+				Processor source = domain;
+				String value = null;
+				while( source != null) {
+					value = source.getProperties().getProperty(key);
+					if ( value != null )
+						break;
+					
+					source = source.getParent();
+				}
+				
 				if (value != null)
-					return process(value, new Link(link, key));
+					return process(value, new Link(source,link, key));
 
-				value = doCommands(key);
+				value = doCommands(key, link);
 				if (value != null)
-					return process(value, new Link(link, key));
+					return process(value, new Link(source, link, key));
 
 				if (key != null && key.trim().length() > 0) {
 					value = System.getProperty(key);
@@ -141,7 +160,7 @@ public class Macro implements Replacer {
 	 */
 	static Pattern	commands	= Pattern.compile("(?<!\\\\);");
 
-	private String doCommands(String key) {
+	private String doCommands(String key, Link source) {
 		String[] args = commands.split(key);
 		if (args == null || args.length == 0)
 			return null;
@@ -150,6 +169,18 @@ public class Macro implements Replacer {
 			if (args[i].indexOf('\\') >= 0)
 				args[i] = args[i].replaceAll("\\\\;", ";");
 
+		
+		if ( args[0].startsWith("^")) {
+			String varname = args[0].substring(1).trim();
+			
+			Processor parent = source.start.getParent();
+			if ( parent != null)
+				return parent.getProperty(varname);
+			else
+				return null;
+		}
+		
+		
 		Processor rover = domain;
 		while (rover != null) {
 			String result = doCommand(rover, args[0], args);
@@ -180,8 +211,12 @@ public class Macro implements Replacer {
 			} catch (NoSuchMethodException e) {
 				// Ignore
 			} catch (InvocationTargetException e) {
-				domain.warning("Exception in replace: " + e.getCause());
-				e.printStackTrace();
+				if ( e.getCause() instanceof IllegalArgumentException ) {
+					domain.error("%s, for cmd: %s, arguments; %s", e.getMessage(), method, Arrays.toString(args));
+				} else {
+					domain.warning("Exception in replace: " + e.getCause());
+					e.getCause().printStackTrace();
+				}
 			} catch (Exception e) {
 				domain.warning("Exception in replace: " + e + " method=" + method);
 				e.printStackTrace();
@@ -319,11 +354,7 @@ public class Macro implements Replacer {
 		if (args.length != 2)
 			throw new RuntimeException("Need a value for the ${def;<value>} macro");
 
-		String value = properties.getProperty(args[1]);
-		if (value == null)
-			return "";
-		else
-			return value;
+		return domain.getProperty(args[1], "");
 	}
 
 	/**
@@ -428,7 +459,7 @@ public class Macro implements Replacer {
 			String del = "";
 			StringBuffer sb = new StringBuffer();
 			for (int i = 1; i < args.length; i++) {
-				File f = new File(args[i]).getAbsoluteFile();
+				File f = domain.getFile(args[i]);
 				if (f.exists() && f.getParentFile().exists()) {
 					sb.append(del);
 					sb.append(f.getParentFile().getAbsolutePath());
@@ -448,7 +479,7 @@ public class Macro implements Replacer {
 			String del = "";
 			StringBuffer sb = new StringBuffer();
 			for (int i = 1; i < args.length; i++) {
-				File f = new File(args[i]).getAbsoluteFile();
+				File f = domain.getFile(args[i]);
 				if (f.exists() && f.getParentFile().exists()) {
 					sb.append(del);
 					sb.append(f.getName());
@@ -530,7 +561,7 @@ public class Macro implements Replacer {
 			throw new IllegalArgumentException(
 					"the ${ls} macro must at least have a directory as parameter");
 
-		File dir = new File(args[1]);
+		File dir = domain.getFile(args[1]);
 		if (!dir.isAbsolute())
 			throw new IllegalArgumentException(
 					"the ${ls} macro directory parameter is not absolute: " + dir);
@@ -602,18 +633,38 @@ public class Macro implements Replacer {
 	 * @param args
 	 * @return
 	 */
-	static String	_versionHelp		= "${version;<mask>;<version>}, modify a version\n"
-												+ "<mask> ::= [ M [ M [ M [ MQ ]]]\n"
-												+ "M ::= '+' | '-' | MQ\n" + "MQ ::= '~' | '='";
-	static Pattern	_versionPattern[]	= new Pattern[] { null, null,
-			Pattern.compile("[-+=~]{0,3}[=~]?"), Verifier.VERSION };
+	final static String		MASK_STRING			= "[\\-+=~0123456789]{0,3}[=~]?";
+	final static Pattern	MASK				= Pattern.compile(MASK_STRING);
+	final static String		_versionHelp		= "${version;<mask>;<version>}, modify a version\n"
+														+ "<mask> ::= [ M [ M [ M [ MQ ]]]\n"
+														+ "M ::= '+' | '-' | MQ\n"
+														+ "MQ ::= '~' | '='";
+	final static Pattern	_versionPattern[]	= new Pattern[] { null, null, MASK,
+			Verifier.VERSION					};
 
 	public String _version(String args[]) {
-		verifyCommand(args, _versionHelp, null, 3, 3);
+		verifyCommand(args, _versionHelp, null, 2, 3);
 
 		String mask = args[1];
 
-		Version version = new Version(args[2]);
+		Version version = null;
+		if (args.length >= 3)
+			version = new Version(args[2]);
+
+		return version(version, mask);
+	}
+
+	String version(Version version, String mask) {
+		if (version == null)
+			version = new Version(domain.getProperty("@"));
+		if (version == null) {
+			domain
+					.error(
+							"No version specified for ${version} or ${range} and no implicit version ${@} either, mask=%s",
+							mask);
+			version = new Version("0");
+		}
+
 		StringBuilder sb = new StringBuilder();
 		String del = "";
 
@@ -651,6 +702,55 @@ public class Macro implements Replacer {
 	}
 
 	/**
+	 * Schortcut for version policy
+	 * 
+	 * <pre>
+	 * -provide-policy : ${policy;[==,=+)}
+	 * -consume-policy : ${policy;[==,+)}
+	 * </pre>
+	 * 
+	 * @param args
+	 * @return
+	 */
+
+	static Pattern	RANGE_MASK		= Pattern.compile("(\\[|\\()(" + MASK_STRING + "),(" + MASK_STRING +")(\\]|\\))");
+	static String	_rangeHelp		= "${range;<mask>[;<version>]}, range for version, if version not specified lookyp ${@}\n"
+											+ "<mask> ::= [ M [ M [ M [ MQ ]]]\n"
+											+ "M ::= '+' | '-' | MQ\n" + "MQ ::= '~' | '='";
+	static Pattern	_rangePattern[]	= new Pattern[] { null, RANGE_MASK };
+
+	public String _range(String args[]) {
+		verifyCommand(args, _rangeHelp, _rangePattern, 2, 3);
+		Version version = null;
+		if (args.length >= 3)
+			version = new Version(args[2]);
+
+		String spec = args[1];
+
+		Matcher m = RANGE_MASK.matcher(spec);
+		m.matches();
+		String floor = m.group(1);
+		String floorMask = m.group(2);
+		String ceilingMask = m.group(3);
+		String ceiling = m.group(4);
+
+		StringBuilder sb = new StringBuilder();
+		sb.append(floor);
+		sb.append(version(version, floorMask));
+		sb.append(",");
+		sb.append(version(version, ceilingMask));
+		sb.append(ceiling);
+
+		String s = sb.toString();
+		VersionRange vr = new VersionRange(s);
+		if (!(vr.includes(vr.getHigh()) || vr.includes(vr.getLow()))) {
+			domain.error("${range} macro created an invalid range %s from %s and mask %s", s,
+					version, spec);
+		}
+		return sb.toString();
+	}
+
+	/**
 	 * System command. Execute a command and insert the result.
 	 * 
 	 * @param args
@@ -674,8 +774,7 @@ public class Macro implements Replacer {
 		}
 		process.getOutputStream().close();
 
-		String s = getString(process.getInputStream());
-		process.getInputStream().close();
+		String s = IO.collect(process.getInputStream(), "UTF-8");
 		int exitValue = process.waitFor();
 		if (exitValue != 0) {
 			domain.error("System command " + command + " failed with " + exitValue);
@@ -705,34 +804,17 @@ public class Macro implements Replacer {
 		verifyCommand(args, "${cat;<in>}, get the content of a file", null, 2, 2);
 		File f = domain.getFile(args[1]);
 		if (f.isFile()) {
-			InputStream in = new FileInputStream(f);
-			return getString(in);
+			return IO.collect(f);
 		} else if (f.isDirectory()) {
 			return Arrays.toString(f.list());
 		} else {
 			try {
 				URL url = new URL(args[1]);
-				InputStream in = url.openStream();
-				return getString(in);
+				return IO.collect(url, "UTF-8");
 			} catch (MalformedURLException mfue) {
 				// Ignore here
 			}
 			return null;
-		}
-	}
-
-	public static String getString(InputStream in) throws IOException {
-		try {
-			StringBuilder sb = new StringBuilder();
-			BufferedReader rdr = new BufferedReader(new InputStreamReader(in));
-			String line = null;
-			while ((line = rdr.readLine()) != null) {
-				sb.append(line);
-				sb.append("\n");
-			}
-			return sb.toString();
-		} finally {
-			in.close();
 		}
 	}
 
@@ -744,10 +826,12 @@ public class Macro implements Replacer {
 		} else if (args.length < low) {
 			message = "too few arguments";
 		} else {
-			for (int i = 0; patterns != null && i < patterns.length && i < args.length - 1; i++) {
-				if (patterns[i] != null && !patterns[i].matcher(args[i + 1]).matches()) {
-					message += String.format("Argument %s (%s) does not match %s\n", i, args[i],
-							patterns[i].pattern());
+			for (int i = 0; patterns != null && i < patterns.length && i < args.length; i++) {
+				if (patterns[i] != null) {
+					Matcher m = patterns[i].matcher(args[i]);
+					if (!m.matches())
+						message += String.format("Argument %s (%s) does not match %s\n", i,
+								args[i], patterns[i].pattern());
 				}
 			}
 		}
@@ -770,10 +854,12 @@ public class Macro implements Replacer {
 	static class Link {
 		Link	previous;
 		String	key;
+		Processor start;
 
-		public Link(Link previous, String key) {
+		public Link(Processor start, Link previous, String key) {
 			this.previous = previous;
 			this.key = key;
+			this.start = start;
 		}
 
 		public boolean contains(String key) {
@@ -813,13 +899,14 @@ public class Macro implements Replacer {
 		flattening = true;
 		try {
 			Properties flattened = new Properties();
-			for (Enumeration<?> e = properties.propertyNames(); e.hasMoreElements();) {
+			Properties source = domain.getProperties();
+			for (Enumeration<?> e = source.propertyNames(); e.hasMoreElements();) {
 				String key = (String) e.nextElement();
 				if (!key.startsWith("_"))
 					if (key.startsWith("-"))
-						flattened.put(key, properties.getProperty(key));
+						flattened.put(key, source.getProperty(key));
 					else
-						flattened.put(key, process(properties.getProperty(key)));
+						flattened.put(key, process(source.getProperty(key)));
 			}
 			return flattened;
 		} finally {
@@ -844,16 +931,6 @@ public class Macro implements Replacer {
 		return Processor.join(list, File.pathSeparator);
 	}
 
-	public static String	_superHelp	= "${super;<key>}, return the value in the parent";
-
-	public String _super(String args[]) {
-		verifyCommand(args, _superHelp, null, 2, 2);
-		Properties parent = getParent(properties);
-		if (parent == null)
-			return null;
-		return process(parent.getProperty(args[1]));
-	}
-
 	public static Properties getParent(Properties p) {
 		try {
 			Field f = Properties.class.getDeclaredField("defaults");
@@ -864,6 +941,10 @@ public class Macro implements Replacer {
 			System.out.println(Arrays.toString(fields));
 			return null;
 		}
+	}
+
+	public String process(String line) {
+		return process(line,domain);
 	}
 
 }

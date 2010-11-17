@@ -16,7 +16,6 @@ import aQute.lib.osgi.eclipse.*;
 import aQute.libg.generics.*;
 import aQute.libg.header.*;
 import aQute.libg.sed.*;
-import aQute.service.scripting.*;
 
 /**
  * This class is NOT threadsafe
@@ -50,7 +49,7 @@ public class Project extends Processor {
 	boolean						inPrepare;
 	int							revision;
 	File						files[];
-
+	private long				buildtime;
 	static List<Project>		trail			= new ArrayList<Project>();
 
 	public Project(Workspace workspace, File projectDir, File buildFile) throws Exception {
@@ -384,7 +383,7 @@ public class Project extends Processor {
 					if (versionRange != null
 							&& (versionRange.equals("project") || versionRange.equals("latest"))) {
 						Project project = getWorkspace().getProject(bsn);
-						if (project.exists()) {
+						if (project != null && project.exists()) {
 							File f = project.getOutput();
 							found = new Container(project, bsn, "project", Container.TYPE.PROJECT,
 									f, null, attrs);
@@ -841,13 +840,7 @@ public class Project extends Processor {
 
 		for (String bsn : parts) {
 			Container container = getBundle(bsn, version, strategy, null);
-			if (container.getError() != null) {
-				error("The ${repo} macro could not find " + bsn + " in the repo, because "
-						+ container.getError() + "\n" + "Repositories     : " + getRepositories()
-						+ "\n" + "Strategy         : " + strategy + "\n" + "Bsn              : "
-						+ bsn + ";version=" + version);
-			} else
-				add(paths, container);
+			add(paths, container);
 		}
 		return join(paths);
 	}
@@ -857,18 +850,23 @@ public class Project extends Processor {
 	}
 
 	private void add(List<String> paths, Container container) throws Exception {
-		if (container.getError() == null) {
-			if (container.getType() == Container.TYPE.LIBRARY) {
-				List<Container> members = container.getMembers();
-				for (Container sub : members) {
-					add(paths, sub);
-				}
-			} else {
-				paths.add(container.getFile().getAbsolutePath());
+		if (container.getType() == Container.TYPE.LIBRARY) {
+			List<Container> members = container.getMembers();
+			for (Container sub : members) {
+				add(paths, sub);
 			}
 		} else {
-			error("Loading library file: %s getting %s", container.getBundleSymbolicName(),
-					container.getError());
+			if (container.getError() == null)
+				paths.add(container.getFile().getAbsolutePath());
+			else {
+				paths.add("<<${repo} = " + container.getBundleSymbolicName() + "-"
+						+ container.getVersion() + " : " + container.getError() + ">>");
+				
+				if ( isPedantic() ) {
+					warning("Could not expand repo path request: %s ", container);
+				}
+			}
+
 		}
 	}
 
@@ -889,43 +887,31 @@ public class Project extends Processor {
 		if (getProperty(NOBUNDLES) != null)
 			return null;
 
-		boolean outofdate = !isUptodate();
-		// for (Project project : getDependson()) {
-		// if (project != this && !project.isUptodate()) {
-		//				
-		// System.out.println("  Building because out of date: " + project);
-		// project.files = project.buildLocal(false);
-		// outofdate = true;
-		// getInfo(project, project + ": ");
-		// }
-		// }
-		if (files == null || outofdate) {
+		if (getProperty("-nope") != null) {
+			warning("Please replace -nope with %s", NOBUNDLES);
+			return null;
+		}
+
+		// Check if we have a local modification not yet build
+		boolean outofdate = false;
+
+		// Check for each dependency if it is locally modified or
+		// its build time > our build time.
+		for (Project dependency : getDependson()) {
+			if (dependency != this) {
+				if (outofdate || dependency.getBuildTime() <= dependency.lastModified()) {
+					dependency.buildLocal(false);
+					outofdate = true;
+				}
+			}
+		}
+
+		if (files == null || outofdate || getBuildTime() <= lastModified()) {
 			trace("Building " + this);
 			files = buildLocal(underTest);
 		}
 
 		return files;
-	}
-
-	private boolean isUptodate() throws Exception {
-		if (getProperty(NOBUNDLES) != null) {
-			return true;
-		}
-
-		if (files == null) {
-			// files = getBuildFiles();
-			// if (files == null)
-
-			return false;
-		}
-
-		for (File f : files) {
-			if ( !f.exists() || f.lastModified() < lastModified()) {
-				return false;
-			}
-		}
-
-		return true;
 	}
 
 	/**
@@ -973,6 +959,7 @@ public class Project extends Processor {
 		if (getProperty(NOBUNDLES) != null)
 			return null;
 
+		long buildtime = System.currentTimeMillis();
 		File bfs = new File(getTarget(), BUILDFILES);
 		bfs.delete();
 
@@ -1004,8 +991,8 @@ public class Project extends Processor {
 				fw.close();
 			}
 			getWorkspace().changedFile(bfs);
+			this.buildtime = buildtime;
 			return files;
-
 		} else
 			return null;
 	}
@@ -1019,9 +1006,9 @@ public class Project extends Processor {
 				reportNewer(f.lastModified(), jar);
 				f.delete();
 				jar.write(f);
-				if ( !f.getParentFile().isDirectory())
+				if (!f.getParentFile().isDirectory())
 					f.getParentFile().mkdirs();
-				
+
 				getWorkspace().changedFile(f);
 			} else {
 				msg = "(not modified since " + new Date(f.lastModified()) + ")";
@@ -1072,7 +1059,7 @@ public class Project extends Processor {
 		super.propertiesChanged();
 		preparedPaths = false;
 		files = null;
-		
+
 	}
 
 	public String getName() {
@@ -1527,4 +1514,15 @@ public class Project extends Processor {
 		lockingReason = null;
 		lock.unlock();
 	}
+
+	public long getBuildTime() throws Exception {
+		if (buildtime == 0) {
+
+			files = getBuildFiles();
+			if (files != null && files.length >= 1)
+				buildtime = files[0].lastModified();
+		}
+		return buildtime;
+	}
+
 }

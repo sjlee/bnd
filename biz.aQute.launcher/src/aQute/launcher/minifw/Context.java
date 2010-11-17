@@ -17,6 +17,7 @@ public class Context extends URLClassLoader implements Bundle, BundleContext, Bu
     Manifest        manifest;
     TreeSet         keys;
     private TreeSet paths;
+	private File	jarFile;
 
     class Dict extends Dictionary {
 
@@ -59,12 +60,17 @@ public class Context extends URLClassLoader implements Bundle, BundleContext, Bu
     }
 
     public Context(MiniFramework fw, ClassLoader parent, int id, String location)
-            throws IOException {
-        super(new URL[] { new File(location).toURL() }, parent);
+            throws Exception {
+        super(new URL[] { new File(location).toURI().toURL() }, parent);
         this.fw = fw;
         this.id = id;
         this.location = location;
-        jar = new JarFile(new File(location));
+        
+        jar = new JarFile(jarFile = new File(location));
+//        Enumeration<JarEntry> entries = jar.entries();
+//        while ( entries.hasMoreElements())
+//        	System.out.println(entries.nextElement().getName());
+        
         manifest = jar.getManifest();
         jar.close();
     }
@@ -78,6 +84,8 @@ public class Context extends URLClassLoader implements Bundle, BundleContext, Bu
     }
 
     public URL getEntry(String path) {
+    	if ( path.startsWith("/"))
+    		path = path.substring(1);
         return getResource(path);
     }
 
@@ -94,7 +102,7 @@ public class Context extends URLClassLoader implements Bundle, BundleContext, Bu
     }
 
     public long getLastModified() {
-        return 0;
+        return jarFile.lastModified();
     }
 
     public String getLocation() {
@@ -269,7 +277,7 @@ public class Context extends URLClassLoader implements Bundle, BundleContext, Bu
     }
 
     public String getProperty(String key) {
-        return null;
+        return fw.getProperty(key);
     }
 
     public Object getService(ServiceReference reference) {

@@ -34,7 +34,6 @@ public class Launcher implements ServiceListener {
 	private final Timer						timer		= new Timer();
 	private final List<BundleActivator>		embedded	= new ArrayList<BundleActivator>();
 	private TimerTask						watchdog	= null;
-	private boolean							services	= true;
 	private final Map<Bundle, Throwable>	errors		= new HashMap<Bundle, Throwable>();
 
 	public static void main(String[] args) {
@@ -89,7 +88,7 @@ public class Launcher implements ServiceListener {
 
 			// Register the command line with ourselves as the
 			// service.
-			if (services) {
+			if (parms.services) { //  Does not work for our dummy framework
 				Hashtable<String, Object> argprops = new Hashtable<String, Object>();
 				argprops.put(LauncherConstants.LAUNCHER_ARGUMENTS, args);
 				argprops.put(LauncherConstants.LAUNCHER_READY, "true");
@@ -171,17 +170,6 @@ public class Launcher implements ServiceListener {
 				}
 				installed.add(b);
 			} catch (BundleException e) {
-				switch (e.getType()) {
-				// Accepted reference
-				case BundleException.MANIFEST_ERROR:
-				case BundleException.RESOLVE_ERROR:
-				case BundleException.ACTIVATOR_ERROR:
-				case BundleException.SECURITY_ERROR:
-				case BundleException.STATECHANGE_ERROR:
-					error("Install: %s error: %s", path, e);
-					return translateToError(e);
-				}
-				
 				trace("failed reference, will try to install %s with input stream", path.getAbsolutePath());
 				String reference = path.toURL().toExternalForm();
 				InputStream in = new FileInputStream(path);
@@ -229,7 +217,7 @@ public class Launcher implements ServiceListener {
 				trace("starting %s", b.getSymbolicName());
 				if (!isFragment(b))
 					b.start();
-				trace("startedg %s", b.getSymbolicName());
+				trace("started  %s", b.getSymbolicName());
 			} catch (BundleException e) {
 				errors.put(b, e);
 				error("Start: %s, cause: %s", b.getBundleId(), e);
@@ -426,7 +414,7 @@ public class Launcher implements ServiceListener {
 
 		Framework systemBundle;
 
-		if (services) {
+		if (parms.services) {
 			trace("using META-INF/services");
 			// 3) framework = null, lookup in META-INF/services
 
@@ -518,7 +506,7 @@ public class Launcher implements ServiceListener {
 			out.println("------------------------------- REPORT --------------------------");
 			out.println();
 			row(out, "Framework", systemBundle == null ? "<>" : systemBundle.getClass());
-			row(out, "Framework type", services ? "META-INF/services" : "mini framework");
+			row(out, "Framework type", parms.services ? "META-INF/services" : "mini framework");
 			row(out, "Storage", parms.storageDir);
 			row(out, "Keep", parms.keep);
 			row(out, "Security", security);

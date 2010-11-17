@@ -2,12 +2,6 @@
 -pom:
 
 
--deploy = \
-	nexus; \
-		connection=scm:git@github.com:bnd/bnd.git; \
-		developerConnection=scm:git@github.com:bnd/bnd.git
-
-
 Bundle-Vendor: 					aQute SARL http://www.aQute.biz
 Bundle-Copyright:				All files contained in this JAR are licensed under the Apache 2.0 license, unless noted differently in their source (see swing2swt).
 Bundle-License: 				http://www.opensource.org/licenses/apache2.0.php; \
@@ -26,8 +20,8 @@ Bundle-RequiredExecutionEnvironment: J2SE-1.5
 -buildpath: com.springsource.junit,\
 	osgi.cmpn;version=4.0,\
 	aQute.libg;version=project,\
-	aQute.service;version=project,\
-	osgi.core;version=4.2.1
+	osgi.core;version=4.1
 
 -pom: true
-Bundle-Version: 1.0.10
+
+Bundle-Version: 1.22.0

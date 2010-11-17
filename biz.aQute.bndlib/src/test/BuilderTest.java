@@ -8,7 +8,145 @@ import junit.framework.*;
 import aQute.lib.osgi.*;
 
 public class BuilderTest extends TestCase {
+	
+	/**
+	 * Test the provide package
+	 */
+	public void testProvidedVersion() throws Exception {
+		Builder b = new Builder();
+		b.addClasspath( new File("jar/osgi.jar"));
+		b.addClasspath( new File("bin"));
+		b.setProperty(Constants.EXPORT_PACKAGE, "org.osgi.service.event;provide:=true");
+		b.setProperty("Private-Package", "test.refer");
+		Jar jar = b.build();
+		String ip = jar.getManifest().getMainAttributes().getValue(Constants.IMPORT_PACKAGE);
+		Map<String,Map<String,String>> map = Processor.parseHeader(ip, null);
+		assertEquals( "[1.0,1.1)", map.get("org.osgi.service.event").get("version"));
+		
+	}	
+	
+	public void testUnProvidedVersion() throws Exception {
+		Builder b = new Builder();
+		b.addClasspath( new File("jar/osgi.jar"));
+		b.addClasspath( new File("bin"));
+		b.setProperty(Constants.EXPORT_PACKAGE, "org.osgi.service.event;provide:=false");
+		b.setProperty("Private-Package", "test.refer");
+		Jar jar = b.build();
+		String ip = jar.getManifest().getMainAttributes().getValue(Constants.IMPORT_PACKAGE);
+		Map<String,Map<String,String>> map = Processor.parseHeader(ip, null);
+		assertEquals( "[1.0,2)", map.get("org.osgi.service.event").get("version"));
+	}	
+	
+	
+	/**
+	 * Complaint that exported versions were not picked up from external bundle.
+	 */
+	
+	public void testExportedVersionsNotPickedUp() throws Exception {
+		Builder b = new Builder();
+		b.addClasspath( new File("jar/jsr311-api-1.1.1.jar"));
+		b.setProperty("Export-Package", "javax.ws.rs.core");
+		Jar jar = b.build();
+		String ip = jar.getManifest().getMainAttributes().getValue(Constants.EXPORT_PACKAGE);
+		Map<String,Map<String,String>> map = Processor.parseHeader(ip, null);
+		assertEquals( "1.1.1", map.get("javax.ws.rs.core").get("version"));
+	}
 
+	/** 
+	 * Test where the version comes from: Manifest or packageinfo
+	 * 
+	 * @throws Exception
+	 */
+    public void testExportVersionSource() throws Exception {
+    	Manifest manifest = new Manifest();
+    	manifest.getMainAttributes().putValue("Export-Package", "org.osgi.service.event;version=100");
+
+    	// Remove packageinfo
+    	Jar manifestOnly = new Jar(new File("jar/osgi.jar"));
+    	manifestOnly.remove("org/osgi/service/event/packageinfo");
+    	manifestOnly.setManifest(manifest);
+    	
+    	// Remove manifest
+    	Jar packageInfoOnly = new Jar(new File("jar/osgi.jar"));
+    	packageInfoOnly.setManifest( new Manifest() );
+    	
+    	
+    	Jar both = new Jar( new File("jar/osgi.jar"));
+    	both.setManifest( manifest );
+    	
+    	// Only version in manifest
+        Builder bms = new Builder();
+        bms.addClasspath(manifestOnly);
+        bms.setProperty("Export-Package", "org.osgi.service.event");
+        bms.build();
+        String s = bms.getExports().get("org.osgi.service.event").get("version");
+        assertEquals("100", s);
+        
+    	// Only version in packageinfo
+        Builder bpinfos = new Builder();
+        bpinfos.addClasspath(packageInfoOnly);
+        bpinfos.setProperty("Export-Package", "org.osgi.service.event");
+        bpinfos.build();
+        s = bpinfos.getExports().get("org.osgi.service.event").get("version");
+        assertEquals("1.0.1", s);
+        
+//    	// Version in manifest + packageinfo
+//        Builder bboth = new Builder();
+//        bboth.addClasspath(both);
+//        bboth.setProperty("Export-Package", "org.osgi.service.event");
+//        bboth.build();
+//        s = bboth.getExports().get("org.osgi.service.event").get("version");
+//        assertEquals("100", s);
+    }
+	/** 
+	 * Test where the version comes from: Manifest or packageinfo
+	 * 
+	 * @throws Exception
+	 */
+    public void testImportVersionSource() throws Exception {
+    	Jar ms = new Jar("manifestsource");
+    	Jar pinfos = new Jar("packageinfosource");
+    	Jar both = new Jar("both");
+    	
+    	Manifest mms = new Manifest();
+    	mms.getMainAttributes().putValue("Export-Package", "org.osgi.service.event; version=100");
+    	ms.setManifest(mms);
+    	
+    	pinfos.putResource( "org/osgi/service/event/packageinfo", new EmbeddedResource( "version 99".getBytes(),0));
+    	
+    	Manifest mboth = new Manifest();
+    	mboth.getMainAttributes().putValue("Export-Package", "org.osgi.service.event; version=100");    	
+    	both.putResource( "org/osgi/service/event/packageinfo", new EmbeddedResource( "version 99".getBytes(),0));
+    	both.setManifest(mboth);
+    	
+    	
+    	// Only version in manifest
+        Builder bms = new Builder();
+        bms.addClasspath(ms);
+        bms.setProperty("Import-Package", "org.osgi.service.event");
+        bms.build();
+        String s = bms.getImports().get("org.osgi.service.event").get("version");
+        assertEquals("[100.0,101)", s);
+        
+    	// Only version in packageinfo
+        Builder bpinfos = new Builder();
+        bpinfos.addClasspath(pinfos);
+        bpinfos.setProperty("Import-Package", "org.osgi.service.event");
+        bpinfos.build();
+        s = bpinfos.getImports().get("org.osgi.service.event").get("version");
+        assertEquals("[99.0,100)", s);
+        
+    	// Version in manifest + packageinfo
+        Builder bboth = new Builder();
+        bboth.addClasspath(both);
+        bboth.setProperty("Import-Package", "org.osgi.service.event");
+        bboth.build();
+        s = bboth.getImports().get("org.osgi.service.event").get("version");
+        assertEquals("[100.0,101)", s);
+        
+    }
+    
+    
 	public void testNoImportDirective() throws Exception{
         Builder b = new Builder();
         b.setProperty("Export-Package", "org.osgi.util.measurement, org.osgi.service.http;-noimport:=true");
@@ -643,6 +781,9 @@ public class BuilderTest extends TestCase {
      * @throws Exception
      */
     public void testVersionCleanup() throws Exception {
+        assertVersion("000001.0003.00000-SNAPSHOT", "1.3.0.SNAPSHOT");
+        assertVersion("000000.0000.00000-SNAPSHOT", "0.0.0.SNAPSHOT");
+        assertVersion("0-SNAPSHOT", "0.0.0.SNAPSHOT");
         assertVersion("1.3.0.0-0-01-0-SNAPSHOT", "1.3.0.0-0-01-0-SNAPSHOT");
         assertVersion("1.3.0.0-0-01-0", "1.3.0.0-0-01-0");
         assertVersion("0.9.0.1.2.3.4.5-incubator-SNAPSHOT",
@@ -719,6 +860,7 @@ public class BuilderTest extends TestCase {
         Builder b = new Builder();
         b.setClasspath(new File[] { new File("bin") });
         Properties p = new Properties();
+        p.put("build", "xyz");
         p.put("Export-Package", "test*;version=3.1");
         b.setProperties(p);
         b.setPedantic(true);
@@ -951,6 +1093,7 @@ public class BuilderTest extends TestCase {
         Builder bmaker = new Builder();
         Properties p = new Properties();
         p.put("Bundle-Activator", "test.activator.Activator");
+        p.put("build", "xyz");	// for @Version annotation
         p.put("Private-Package", "test.*");
         bmaker.setProperties(p);
         bmaker.setClasspath(new File[] { new File("bin") });

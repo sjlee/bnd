@@ -2,7 +2,8 @@ package test.versionpolicy.api;
 
 import aQute.bnd.annotation.*;
 
-@UsePolicy
+@SuppressWarnings("deprecation") @UsePolicy
+@ConsumerType
 public interface EventHandler {
     void listen(Object o);
 }

@@ -86,7 +86,7 @@ public class PropertiesTest extends TestCase {
         Properties p = new Properties();
         p.load(bin);
         assertEquals("@", p.get("Unicode"));
-        assertEquals("Loïc Cotonéa", p.get("Namex"));
+        assertEquals("Lo\u00EFc Coton\u00E9a", p.get("Namex"));
         
         // Now test if we can make the round trip
         Builder b  = new Builder();
@@ -100,7 +100,7 @@ public class PropertiesTest extends TestCase {
         bin = new ByteArrayInputStream(bout.toByteArray());
         Manifest m = new Manifest( bin );
         
-        assertEquals("Loïc Cotonéa", m.getMainAttributes().getValue("Namex"));
+        assertEquals("Lo\u00EFc Coton\u00E9a", m.getMainAttributes().getValue("Namex"));
     }
 	public void testBadProperties() throws Exception {
 		Analyzer	analyzer = new Analyzer();

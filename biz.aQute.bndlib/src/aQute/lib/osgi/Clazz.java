@@ -785,11 +785,34 @@ public class Clazz {
 			doSignature(in, member);
 		else if ("ConstantValue".equals(attributeName))
 			doConstantValue(in);
+		else if ("Exceptions".equals(attributeName))
+			doExceptions(in, attribute_length);
 		else {
 			if (attribute_length > 0x7FFFFFFF) {
 				throw new IllegalArgumentException("Attribute > 2Gb");
 			}
 			in.skipBytes((int) attribute_length);
+		}
+	}
+	
+	/**
+	 * <pre>
+	 * Exceptions {
+	 *  u2 number_of_exceptions;
+	 *  u2 exception_index_table[number_of_exceptions];
+	 * }
+	 * </pre>
+	 */
+	private void doExceptions(DataInputStream in, long attribute_length) 
+			throws IOException {
+		int numberOfExceptions = in.readUnsignedShort();
+		if (attribute_length != (numberOfExceptions + 1)*2) {
+			throw new IllegalArgumentException("the number of exceptions do not match the data");
+		}
+		int[] exceptionIndexTable = new int[numberOfExceptions];
+		for (int i = 0; i < numberOfExceptions; i++) {
+			exceptionIndexTable[i] = in.readUnsignedShort();
+//			System.err.println(pool[intPool[exceptionIndexTable[i]]]);
 		}
 	}
 

@@ -69,6 +69,8 @@ public class Clazz {
 	 * <pre>
 	 * ACC_PUBLIC 0x0001 Declared public; may be accessed from outside its
 	 * package. 
+	 * ACC_PROTECTED 0x0004 Declared protected; may be accessed within 
+	 * subclasses.
 	 * ACC_FINAL 0x0010 Declared final; no subclasses allowed.
 	 * ACC_SUPER 0x0020 Treat superclass methods specially when invoked by the
 	 * invokespecial instruction. 
@@ -85,6 +87,12 @@ public class Clazz {
 	// be
 	// accessed
 	// from outside its package.
+	final static int				ACC_PROTECTED	= 0x0004;									// Declared
+	// protected;
+	// may
+	// be
+	// accessed
+	// within subclasses.
 	final static int				ACC_FINAL		= 0x0010;									// Declared
 	// final;
 	// no

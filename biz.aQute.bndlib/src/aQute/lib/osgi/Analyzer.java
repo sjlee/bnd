@@ -1626,7 +1626,7 @@ public class Analyzer extends Processor {
 					Set<String> t = uses.get(pack);
 					if (t == null)
 						uses.put(pack, t = new LinkedHashSet<String>());
-					t.addAll(clazz.getReferred());
+					t.addAll(clazz.getUses());
 					t.remove(pack);
 				}
 			}

@@ -331,6 +331,8 @@ public class Clazz {
 	Object				pool[];
 	int					intPool[];
 	Set<String>			imports		= Create.set();
+	Set<String>			uses		= Create.set();
+	Set<String>			descriptorsForUses = Create.set();
 	String				path;
 	int					minor		= 0;
 	int					major		= 0;
@@ -484,6 +486,10 @@ public class Clazz {
 			if (zuper != null) {
 				String pack = getPackage(zuper);
 				packageReference(pack);
+				// add uses if this type is public
+				if (isPublic) {
+					addUses(pack);
+				}
 				if (cd != null)
 					cd.extendsClass(zuper);
 			}
@@ -491,8 +497,14 @@ public class Clazz {
 			int interfacesCount = in.readUnsignedShort();
 			if (interfacesCount > 0) {
 				interfaces = new String[interfacesCount];
-				for (int i = 0; i < interfacesCount; i++)
+				for (int i = 0; i < interfacesCount; i++) {
 					interfaces[i] = (String) pool[intPool[in.readUnsignedShort()]];
+					// add uses if this type is public
+					if (isPublic) {
+						String pack = getPackage(interfaces[i]);
+						addUses(pack);
+					}
+				}
 				if (cd != null)
 					cd.implementsInterfaces(interfaces);
 			}
@@ -521,6 +533,7 @@ public class Clazz {
 					cd.field(last = new FieldDef(access_flags, className, name,
 							pool[descriptor_index].toString()));
 				descriptors.add(new Integer(descriptor_index));
+				markDescriptorForUses(access_flags, descriptor_index);
 				doAttributes(in, ElementType.FIELD, false);
 			}
 
@@ -554,6 +567,7 @@ public class Clazz {
 				int name_index = in.readUnsignedShort();
 				int descriptor_index = in.readUnsignedShort();
 				descriptors.add(new Integer(descriptor_index));
+				markDescriptorForUses(access_flags, descriptor_index);
 				String name = pool[name_index].toString();
 				String descriptor = pool[descriptor_index].toString();
 				if (cd != null) {
@@ -562,10 +576,12 @@ public class Clazz {
 					cd.method(mdef);
 				}
 
+				boolean isPublicOrProtected = (access_flags & ACC_PUBLIC) != 0 ||
+						(access_flags & ACC_PROTECTED) != 0;
 				if ("<init>".equals(name)) {
-					doAttributes(in, ElementType.CONSTRUCTOR, crawl);
+					doAttributes(in, ElementType.CONSTRUCTOR, crawl, isPublicOrProtected);
 				} else {
-					doAttributes(in, ElementType.METHOD, crawl);
+					doAttributes(in, ElementType.METHOD, crawl, isPublicOrProtected);
 				}
 			}
 
@@ -605,6 +621,17 @@ public class Clazz {
 		} finally {
 			if (cd != null)
 				cd.classEnd();
+		}
+	}
+	
+	private void markDescriptorForUses(int access_flags, int descriptor_index) {
+		if (isPublic) {
+			boolean isPublicOrProtected = (access_flags & ACC_PUBLIC) != 0 ||
+					(access_flags & ACC_PROTECTED) != 0;
+			if (isPublicOrProtected) {
+				// mark the descriptor for uses later
+				descriptorsForUses.add(pool[descriptor_index].toString());
+			}
 		}
 	}
 
@@ -744,6 +771,10 @@ public class Clazz {
 		return -1;
 	}
 
+	private void doAttributes(DataInputStream in, ElementType member, boolean crawl) throws IOException {
+		doAttributes(in, member, crawl, false);
+	}
+	
 	/**
 	 * Called for each attribute in the class, field, or method.
 	 * 
@@ -751,12 +782,12 @@ public class Clazz {
 	 *            The stream
 	 * @throws IOException
 	 */
-	private void doAttributes(DataInputStream in, ElementType member, boolean crawl)
+	private void doAttributes(DataInputStream in, ElementType member, boolean crawl, boolean analyzeExceptions)
 			throws IOException {
 		int attributesCount = in.readUnsignedShort();
 		for (int j = 0; j < attributesCount; j++) {
 			// skip name CONSTANT_Utf8 pointer
-			doAttribute(in, member, crawl);
+			doAttribute(in, member, crawl, analyzeExceptions);
 		}
 	}
 
@@ -767,7 +798,7 @@ public class Clazz {
 	 *            the data stream
 	 * @throws IOException
 	 */
-	private void doAttribute(DataInputStream in, ElementType member, boolean crawl)
+	private void doAttribute(DataInputStream in, ElementType member, boolean crawl, boolean analyzeExceptions)
 			throws IOException {
 		int attribute_name_index = in.readUnsignedShort();
 		String attributeName = (String) pool[attribute_name_index];
@@ -793,7 +824,7 @@ public class Clazz {
 			doSignature(in, member);
 		else if ("ConstantValue".equals(attributeName))
 			doConstantValue(in);
-		else if ("Exceptions".equals(attributeName))
+		else if (isPublic && analyzeExceptions && "Exceptions".equals(attributeName))
 			doExceptions(in, attribute_length);
 		else {
 			if (attribute_length > 0x7FFFFFFF) {
@@ -820,7 +851,9 @@ public class Clazz {
 		int[] exceptionIndexTable = new int[numberOfExceptions];
 		for (int i = 0; i < numberOfExceptions; i++) {
 			exceptionIndexTable[i] = in.readUnsignedShort();
-//			System.err.println(pool[intPool[exceptionIndexTable[i]]]);
+			String ex = (String)pool[intPool[exceptionIndexTable[i]]];
+			String pack = getPackage(ex);
+			addUses(ex);
 		}
 	}
 
@@ -1205,6 +1238,16 @@ public class Clazz {
 	void packageReference(String pack) {
 		imports.add(pack);
 	}
+	
+	/**
+	 * Add a new uses package.
+	 * 
+	 * @param pack
+	 *            A '.' delimited package name 
+	 */
+	void addUses(String pack) {
+		uses.add(pack);
+	}
 
 	/**
 	 * This method parses a descriptor and adds the package of the descriptor to
@@ -1298,8 +1341,14 @@ public class Clazz {
 			if (cd != null)
 				cd.addReference(sb.toString());
 
-			if (lastSlash > 0)
-				packageReference(sb.substring(0, lastSlash));
+			if (lastSlash > 0) {
+				String pack = sb.substring(0, lastSlash);
+				packageReference(pack);
+				// see if we add this to uses
+				if (descriptorsForUses.contains(descriptor)) {
+					addUses(pack);
+				}
+			}
 		} else {
 			if ("+-*BCDFIJSZV".indexOf(c) < 0)
 				;// System.out.println("Should not skip: " + c);
@@ -1323,6 +1372,10 @@ public class Clazz {
 
 	public Set<String> getReferred() {
 		return imports;
+	}
+	
+	public Set<String> getUses() {
+		return uses;
 	}
 
 	String getClassName() {
